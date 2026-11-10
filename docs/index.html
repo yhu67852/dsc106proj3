@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where does the world warm least by 2050?</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1100px;margin:0 auto;padding:16px;color:#222}
+h1{margin:0 0 4px} #sub{font-size:13px;color:#555;margin:0 0 12px}
+#ctl{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.btn{border:2px solid;background:#fff;border-radius:16px;padding:4px 12px;cursor:pointer;font-size:13px}
+.btn.on{color:#fff}
+#row{display:flex;gap:12px;flex-wrap:wrap} #row svg{flex:1 1 440px;min-width:0}
+#note{background:#fff8e1;border-left:4px solid #f9a825;padding:8px 12px;margin:8px 0;font-size:14px}
+#tip{position:fixed;pointer-events:none;background:#222;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;opacity:0}
+.axis text{font-size:11px} .hint{font-size:12px;fill:#777}
+#writeup{margin-top:28px;border-top:1px solid #ccc;padding-top:12px}
+</style></head><body>
+<h1>Where does the world warm least by 2050?</h1>
+<p id="sub"></p>
+<div id="ctl">
+  <span id="scn"></span>
+  <label>Decade: <input id="yr" type="range" min="0" value="3"> <b id="yl"></b></label>
+  <label><input id="low" type="checkbox"> Show only the coolest 10% of the map</label>
+</div>
+<div id="note"></div>
+<div id="row"><svg id="map"></svg><svg id="bars"></svg></div>
+<svg id="line" viewBox="0 0 900 240" width="100%"></svg>
+<div id="tip"></div>
+<section id="writeup">
+  <h2>Write-up</h2>
+  <h3>Design rationale</h3><p>TODO (team): encodings, interactions, alternatives considered.</p>
+  <h3>Development process</h3><p>TODO (team): work split, people-hours, what took longest.</p>
+</section>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script>
+const SC={ssp126:"SSP1-2.6",ssp245:"SSP2-4.5",ssp370:"SSP3-7.0",ssp585:"SSP5-8.5"};
+const COL={ssp126:"#1a9850",ssp245:"#4575b4",ssp370:"#f46d43",ssp585:"#a50026"};
+Promise.all([d3.json("data/warming.json"),
+  d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/land-110m.json")]).then(([D,world])=>{
+const nlon=D.lon.length, step=5, tip=d3.select("#tip");
+let scen="ssp245", yi=D.years.indexOf(2050), low=false, pin=null, hov=null;
+d3.select("#sub").text(`Multi-model mean of ${D.models.length} CMIP6 models (${D.models.join(", ")}). `+
+ `Warming = decade mean near-surface air temperature minus ${D.baseline} historical mean, on a 5° grid. `+
+ `Regions are IPCC AR6 reference regions (area-weighted mean). Bars show ±1 inter-model SD. Colour scale is fixed across scenarios and decades.`);
+
+// ---- scales
+const all=Object.values(D.grid).flat(2).filter(v=>v!=null);
+const color=d3.scaleSequential(d3.interpolateYlOrRd).domain(d3.extent(all));
+const rmax=d3.max(Object.values(D.regmean).flat(2).concat([0]))*1.15+0.3;
+
+// ---- controls
+d3.select("#scn").selectAll("button").data(Object.keys(SC)).join("button").attr("class","btn")
+  .style("border-color",d=>COL[d]).text(d=>SC[d]).on("click",(e,d)=>{scen=d;update()});
+d3.select("#yr").attr("max",D.years.length-1).property("value",yi).on("input",e=>{yi=+e.target.value;update()});
+d3.select("#low").on("change",e=>{low=e.target.checked;update()});
+
+// ---- map
+const mw=640,mh=320, map=d3.select("#map").attr("viewBox",`0 0 ${mw} ${mh+50}`);
+const proj=d3.geoEquirectangular().fitSize([mw,mh],{type:"Sphere"});
+const cells=d3.range(D.reg.length).map(k=>{
+  const la=D.lat[Math.floor(k/nlon)], lo=D.lon[k%nlon];
+  const [x0,y0]=proj([lo-step/2,la+step/2]), [x1,y1]=proj([lo+step/2,la-step/2]);
+  return {k,x:x0,y:y0,w:x1-x0+.5,h:y1-y0+.5,r:D.reg[k]};});
+const gc=map.append("g").selectAll("rect").data(cells).join("rect")
+  .attr("x",c=>c.x).attr("y",c=>c.y).attr("width",c=>c.w).attr("height",c=>c.h)
+  .on("mousemove",(e,c)=>{const v=D.grid[scen][yi][c.k];
+     show(e,`${c.r>=0?D.regions[c.r].n:"—"}<br>${v==null?"n/a":v.toFixed(2)+" °C"} (${SC[scen]}, ${D.years[yi]}s)`);
+     hov=c.r>=0?c.r:null;drawMap()})
+  .on("mouseleave",()=>{hide();hov=null;drawMap()})
+  .on("click",(e,c)=>{if(c.r>=0){pin=c.r;update()}});
+map.append("path").datum(topojson.feature(world,world.objects.land)).attr("d",d3.geoPath(proj))
+  .attr("fill","none").attr("stroke","#444").attr("stroke-width",.5).style("pointer-events","none");
+const defs=map.append("defs").append("linearGradient").attr("id","lg");
+d3.range(0,1.01,.1).forEach(t=>defs.append("stop").attr("offset",t).attr("stop-color",color(color.domain()[0]+t*(color.domain()[1]-color.domain()[0]))));
+map.append("rect").attr("x",20).attr("y",mh+8).attr("width",260).attr("height",10).attr("fill","url(#lg)");
+map.append("g").attr("class","axis").attr("transform",`translate(20,${mh+18})`)
+  .call(d3.axisBottom(d3.scaleLinear(color.domain(),[0,260])).ticks(6));
+map.append("text").attr("x",290).attr("y",mh+17).attr("class","hint").text("warming (°C)");
+
+function drawMap(){
+  const v=D.grid[scen][yi], cut=d3.quantile(v.filter(d=>d!=null).sort(d3.ascending),.1);
+  const act=hov!=null?hov:pin;
+  gc.attr("fill",c=>{const x=v[c.k]; return x==null?"#ddd":(low&&x>cut)?"#eee":color(x)})
+    .attr("opacity",c=>act==null||c.r===act?1:.35)
+    .attr("stroke",c=>act!=null&&c.r===act?"#000":"none").attr("stroke-width",.5);
+}
+
+// ---- bars: 15 lowest-warming regions
+const bs=d3.select("#bars").attr("viewBox","0 0 520 360"), M={l:190,r:20,t:26,b:36};
+const bx=d3.scaleLinear([0,rmax],[M.l,520-M.r]), by=d3.scaleBand().range([M.t,360-M.b]).padding(.2);
+bs.append("text").attr("x",M.l).attr("y",14).attr("font-weight",600).attr("font-size",13).text("15 lowest-warming regions");
+const gx=bs.append("g").attr("class","axis").attr("transform",`translate(0,${360-M.b})`).call(d3.axisBottom(bx).ticks(5));
+bs.append("text").attr("x",M.l).attr("y",356).attr("class","hint").text("warming (°C) · click a bar to pin");
+const gy=bs.append("g").attr("class","axis").attr("transform",`translate(${M.l},0)`), gb=bs.append("g");
+function drawBars(){
+  const rows=D.regions.map((r,i)=>({i,n:r.n,v:D.regmean[scen][yi][i],s:D.regsd[scen][yi][i]}))
+    .filter(d=>d.v!=null).sort((a,b)=>a.v-b.v).slice(0,15);
+  by.domain(rows.map(d=>d.i));
+  gy.transition().duration(400).call(d3.axisLeft(by).tickFormat(i=>D.regions[i].n.slice(0,28)).tickSize(0)).select(".domain").remove();
+  const g=gb.selectAll("g.b").data(rows,d=>d.i).join(e=>{const g=e.append("g").attr("class","b").attr("transform",d=>`translate(0,${by(d.i)})`);
+     g.append("rect").attr("x",M.l);g.append("line").attr("class","eb");return g;});
+  g.on("mouseenter",(e,d)=>{hov=d.i;drawMap()}).on("mouseleave",()=>{hov=null;drawMap()}).on("click",(e,d)=>{pin=d.i;update()})
+   .on("mousemove",(e,d)=>show(e,`${d.n}<br>${d.v.toFixed(2)} ± ${d.s.toFixed(2)} °C`)).on("mouseout",hide);
+  g.transition().duration(400).attr("transform",d=>`translate(0,${by(d.i)})`);
+  g.select("rect").transition().duration(400).attr("height",by.bandwidth()).attr("width",d=>bx(d.v)-M.l)
+    .attr("fill",d=>d.i===pin?"#222":color(d.v));
+  g.select("line.eb").attr("stroke","#333").transition().duration(400).attr("y1",by.bandwidth()/2).attr("y2",by.bandwidth()/2)
+    .attr("x1",d=>bx(Math.max(0,d.v-d.s))).attr("x2",d=>bx(d.v+d.s));
+}
+
+// ---- line chart for pinned region
+const ls=d3.select("#line"), LM={l:50,r:90,t:28,b:30};
+const lx=d3.scaleLinear(d3.extent(D.years),[LM.l,900-LM.r]), ly=d3.scaleLinear([0,rmax],[240-LM.b,LM.t]);
+function drawLine(){
+  ls.selectAll("*").remove();
+  if(pin==null){ls.append("text").attr("x",LM.l).attr("y",120).attr("class","hint").text("Click a bar or a map cell to see that region's trajectory under every scenario.");return;}
+  ls.append("text").attr("x",LM.l).attr("y",16).attr("font-weight",600).attr("font-size",13).text(`${D.regions[pin].n}: warming by decade, all scenarios`);
+  ls.append("g").attr("class","axis").attr("transform",`translate(0,${240-LM.b})`).call(d3.axisBottom(lx).tickValues(D.years).tickFormat(d=>d+"s"));
+  ls.append("g").attr("class","axis").attr("transform",`translate(${LM.l},0)`).call(d3.axisLeft(ly).ticks(5));
+  Object.keys(SC).forEach(s=>{
+    const pts=D.years.map((y,t)=>[y,D.regmean[s][t][pin]]).filter(p=>p[1]!=null);
+    ls.append("path").datum(pts).attr("fill","none").attr("stroke",COL[s]).attr("stroke-width",s===scen?3:1.5)
+      .attr("d",d3.line().x(p=>lx(p[0])).y(p=>ly(p[1])));
+    const l=pts[pts.length-1]; if(l) ls.append("text").attr("x",lx(l[0])+6).attr("y",ly(l[1])+4).attr("font-size",11).attr("fill",COL[s]).text(SC[s]);
+  });
+  ls.append("line").attr("x1",lx(D.years[yi])).attr("x2",lx(D.years[yi])).attr("y1",LM.t).attr("y2",240-LM.b)
+    .attr("stroke","#999").attr("stroke-dasharray","4 3");
+}
+
+// ---- annotation: global-mean gap between scenarios
+function gmean(s,t){const v=D.grid[s][t];let a=0,w=0;v.forEach((x,k)=>{if(x==null)return;const c=Math.cos(D.lat[Math.floor(k/nlon)]*Math.PI/180);a+=x*c;w+=c});return a/w}
+function note(){const lo=gmean("ssp126",yi),hi=gmean("ssp585",yi);
+  d3.select("#note").html(`In the <b>${D.years[yi]}s</b>, global-mean warming is <b>${lo.toFixed(1)} °C</b> under SSP1-2.6 vs <b>${hi.toFixed(1)} °C</b> under SSP5-8.5 — a gap of ${(hi-lo).toFixed(1)} °C. Drag the slider toward 2090s to watch the scenarios diverge.`)}
+
+function show(e,h){tip.html(h).style("left",e.clientX+12+"px").style("top",e.clientY+12+"px").style("opacity",1)}
+function hide(){tip.style("opacity",0)}
+function update(){
+  d3.select("#yl").text(D.years[yi]+"s");
+  d3.selectAll("#scn .btn").classed("on",d=>d===scen).style("background",d=>d===scen?COL[d]:"#fff").style("color",d=>d===scen?"#fff":"#222");
+  note(); drawMap(); drawBars(); drawLine();
+}
+update();
+});
+</script></body></html>
