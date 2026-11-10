@@ -45,7 +45,8 @@ d3.select("#sub").text(`Multi-model mean of ${D.models.length} CMIP6 models (${D
 
 // ---- scales
 const all=Object.values(D.grid).flat(2).filter(v=>v!=null);
-const color=d3.scaleSequential(d3.interpolateYlOrRd).domain(d3.extent(all));
+const hi=d3.quantile(all.slice().sort(d3.ascending),.98);
+const color=d3.scaleSequential(d3.interpolateYlOrRd).domain([Math.min(0,d3.min(all)),hi]).clamp(true);
 const rmax=d3.max(Object.values(D.regmean).flat(2).concat([0]))*1.15+0.3;
 
 // ---- controls
@@ -75,19 +76,20 @@ d3.range(0,1.01,.1).forEach(t=>defs.append("stop").attr("offset",t).attr("stop-c
 map.append("rect").attr("x",20).attr("y",mh+8).attr("width",260).attr("height",10).attr("fill","url(#lg)");
 map.append("g").attr("class","axis").attr("transform",`translate(20,${mh+18})`)
   .call(d3.axisBottom(d3.scaleLinear(color.domain(),[0,260])).ticks(6));
-map.append("text").attr("x",290).attr("y",mh+17).attr("class","hint").text("warming (°C)");
+map.append("text").attr("x",290).attr("y",mh+17).attr("class","hint").text(`warming (°C), darkest = ${hi.toFixed(1)}+`);
 
 function drawMap(){
   const v=D.grid[scen][yi], cut=d3.quantile(v.filter(d=>d!=null).sort(d3.ascending),.1);
   const act=hov!=null?hov:pin;
   gc.attr("fill",c=>{const x=v[c.k]; return x==null?"#ddd":(low&&x>cut)?"#eee":color(x)})
-    .attr("opacity",c=>act==null||c.r===act?1:.35)
-    .attr("stroke",c=>act!=null&&c.r===act?"#000":"none").attr("stroke-width",.5);
+    .attr("opacity",c=>act==null||c.r===act?1:.2)
+    .attr("stroke","none");
 }
 
 // ---- bars: 15 lowest-warming regions
 const bs=d3.select("#bars").attr("viewBox","0 0 520 360"), M={l:190,r:20,t:26,b:36};
-const bx=d3.scaleLinear([0,rmax],[M.l,520-M.r]), by=d3.scaleBand().range([M.t,360-M.b]).padding(.2);
+const bmax=1.1*d3.max(Object.keys(SC).flatMap(s=>D.years.flatMap((_,t)=>D.regmean[s][t].map((v,i)=>({v,s:D.regsd[s][t][i]})).filter(d=>d.v!=null).sort((a,b)=>a.v-b.v).slice(0,15).map(d=>d.v+d.s))));
+const bx=d3.scaleLinear([0,bmax],[M.l,520-M.r]), by=d3.scaleBand().range([M.t,360-M.b]).padding(.2);
 bs.append("text").attr("x",M.l).attr("y",14).attr("font-weight",600).attr("font-size",13).text("15 lowest-warming regions");
 const gx=bs.append("g").attr("class","axis").attr("transform",`translate(0,${360-M.b})`).call(d3.axisBottom(bx).ticks(5));
 bs.append("text").attr("x",M.l).attr("y",356).attr("class","hint").text("warming (°C) · click a bar to pin");
@@ -115,6 +117,7 @@ function drawLine(){
   ls.selectAll("*").remove();
   if(pin==null){ls.append("text").attr("x",LM.l).attr("y",120).attr("class","hint").text("Click a bar or a map cell to see that region's trajectory under every scenario.");return;}
   ls.append("text").attr("x",LM.l).attr("y",16).attr("font-weight",600).attr("font-size",13).text(`${D.regions[pin].n}: warming by decade, all scenarios`);
+  ly.domain([0,1.1*d3.max(Object.keys(SC).flatMap(s=>D.regmean[s].map(r=>r[pin])).filter(v=>v!=null))]);
   ls.append("g").attr("class","axis").attr("transform",`translate(0,${240-LM.b})`).call(d3.axisBottom(lx).tickValues(D.years).tickFormat(d=>d+"s"));
   ls.append("g").attr("class","axis").attr("transform",`translate(${LM.l},0)`).call(d3.axisLeft(ly).ticks(5));
   Object.keys(SC).forEach(s=>{
